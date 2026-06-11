@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, StyleSheet, Pressable, Animated, Easing } from 'react-native';
+import { View, Text, StyleSheet, Pressable, Animated, Easing, Image } from 'react-native';
 import { useRouter } from 'expo-router';
 import { PaperScreen } from '../src/components/PaperScreen';
 import { PrimaryButton } from '../src/components/PrimaryButton';
@@ -113,7 +113,7 @@ export default function Onboarding() {
       sub: null,
       art: (
         <View style={{ alignItems: 'center' }}>
-          <View style={styles.lamp} />
+          <Image source={require('../assets/icon.png')} style={styles.logo} />
           <Text style={styles.wordmark}>Reading Buddy</Text>
           <Text style={styles.tagline}>never read alone</Text>
         </View>
@@ -197,18 +197,7 @@ const styles = StyleSheet.create({
   noteAttrText: { fontFamily: typography.sansSemibold, fontSize: 10, letterSpacing: 1.2, color: colors.amber },
   noteBody: { fontFamily: typography.serif, fontSize: 16, lineHeight: 23, color: colors.dText },
 
-  lamp: {
-    width: 56,
-    height: 56,
-    borderRadius: 999,
-    backgroundColor: colors.amber,
-    marginBottom: 20,
-    shadowColor: '#E0A23B',
-    shadowOpacity: 0.6,
-    shadowRadius: 30,
-    shadowOffset: { width: 0, height: 0 },
-    elevation: 10,
-  },
+  logo: { width: 84, height: 84, borderRadius: 18, marginBottom: 20 },
   wordmark: { fontFamily: typography.serifLight, fontSize: 46, color: colors.ink, letterSpacing: -1 },
   tagline: { fontFamily: typography.serifItalic, fontSize: 20, color: colors.muted, marginTop: 18 },
 

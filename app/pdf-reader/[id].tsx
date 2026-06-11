@@ -1,34 +1,29 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   View, Text, StyleSheet, Pressable, ScrollView, Animated, Easing,
-  TextInput, useWindowDimensions,
+  TextInput, useWindowDimensions, ActivityIndicator
 } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useLocalSearchParams } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Sentence } from '../../src/components/reader/Sentence';
 import { Icons } from '../../src/components/Icons';
 import { colors, readerThemes, ReaderThemeKey } from '../../src/theme/colors';
 import { typography } from '../../src/theme/typography';
-import {
-  R2BOOK, R2_BOOK_SUMMARY, ASK_ANSWERS, SIZES, SPACING, snippetFor,
-} from '../../src/data/books';
+import { SIZES, SPACING } from '../../src/data/books';
+import { supabase } from '../../src/lib/supabase';
+import { askGemini } from '../../src/lib/gemini';
 
 type HL = { id: number; page: number; a: number; b: number; aiText: string | null; note: string | null; snippet: string };
 type Sel = { page: number; a: number; b: number };
 type Sheet = { open: boolean; kind?: 'ai' | 'note' | 'view' | 'book'; state?: 'loading' | 'loaded'; hl?: HL };
 
-const SEED: HL[] = [{
-  id: 1, page: 0, a: 1, b: 1,
-  aiText: R2BOOK.pages[0][1].s,
-  note: 'The held-breath image — this is exactly how Gran’s house felt.',
-  snippet: snippetFor(0, 1, 1),
-}];
-
 export default function Reader() {
   const router = useRouter();
+  const { id } = useLocalSearchParams();
   const insets = useSafeAreaInsets();
   const { height } = useWindowDimensions();
 
+  const [book, setBook] = useState<any>(null);
   const [theme, setTheme] = useState<ReaderThemeKey>('ink');
   const [page, setPage] = useState(0);
   const [chrome, setChrome] = useState(true);
@@ -36,23 +31,59 @@ export default function Reader() {
   const [aaOpen, setAaOpen] = useState(false);
   const [sizeI, setSizeI] = useState(1);
   const [spaceI, setSpaceI] = useState(1);
-  const [highlights, setHighlights] = useState<HL[]>(SEED);
+  const [highlights, setHighlights] = useState<HL[]>([]);
   const [sheet, setSheet] = useState<Sheet>({ open: false });
   const [drawer, setDrawer] = useState(false);
-  const timer = useRef<any>(null);
 
   const turn = useRef(new Animated.Value(0)).current;
+  
+  useEffect(() => {
+    if (id) fetchBook();
+  }, [id]);
+
+  const fetchBook = async () => {
+    const { data } = await supabase.from('books').select('*').eq('id', id).single();
+    if (data) {
+      setBook(data);
+      // Ensure pages exist
+      if (!data.content?.pages) {
+        data.content = { pages: [[{ t: "Error: No text could be extracted from this document." }]] };
+      }
+      setPage(Math.floor(data.progress * (data.content.pages.length - 1)) || 0);
+    }
+  };
+
+  const updateProgress = async (p: number) => {
+    if (!book) return;
+    const prog = p / Math.max(1, book.content.pages.length - 1);
+    await supabase.from('books').update({ progress: prog, last_read: new Date() }).eq('id', book.id);
+  };
+
+  if (!book) {
+    return (
+      <View style={[styles.screen, { backgroundColor: colors.paper, alignItems: 'center', justifyContent: 'center' }]}>
+        <ActivityIndicator size="large" color={colors.amber} />
+      </View>
+    );
+  }
+
+  const pages = book.content.pages;
   const pal = readerThemes[theme];
-  const pageNo = R2BOOK.startPage + page;
-  const prog = pageNo / R2BOOK.totalPages;
+  const pageNo = page + 1;
+  const prog = page / Math.max(1, pages.length - 1);
   const noteCount = highlights.length;
+
+  const snippetFor = (p: number, a: number, b: number) => {
+    return pages[p].slice(a, b + 1).map((s: any) => s.t).join(' ').trim();
+  };
 
   const goPage = (dir: number) => {
     const next = page + dir;
-    if (next < 0 || next >= R2BOOK.pages.length) return;
+    if (next < 0 || next >= pages.length) return;
     setSel(null); setAaOpen(false);
     Animated.timing(turn, { toValue: dir, duration: 150, useNativeDriver: true }).start(() => {
       setPage(next);
+      updateProgress(next);
       turn.setValue(-dir);
       Animated.timing(turn, { toValue: 0, duration: 150, easing: Easing.out(Easing.quad), useNativeDriver: true }).start();
     });
@@ -66,15 +97,29 @@ export default function Reader() {
     setSel((s) => (s && s.page === page ? { page, a: Math.min(s.a, idx), b: Math.max(s.b, idx) } : { page, a: idx, b: idx }));
   };
 
-  const explain = () => {
+  const explain = async () => {
     if (!sel) return;
     const { a, b } = sel;
-    const hl: HL = { id: Date.now(), page, a, b, aiText: R2BOOK.pages[page][b].s, note: null, snippet: snippetFor(page, a, b) };
+    const snippet = snippetFor(page, a, b);
+    const hl: HL = { id: Date.now(), page, a, b, aiText: null, note: null, snippet };
     setHighlights((h) => [...h, hl]);
     setSheet({ open: true, kind: 'ai', state: 'loading', hl });
     setSel(null);
-    clearTimeout(timer.current);
-    timer.current = setTimeout(() => setSheet((s) => ({ ...s, state: 'loaded' })), 1300);
+    
+    try {
+      const context = pages[page].map((s: any) => s.t).join(' ');
+      const prompt = `You are Reading Buddy, an AI assistant built into an e-reader.
+The user highlighted this quote: "${snippet}"
+From the following page context: "${context}"
+
+Provide a highly insightful, concise (1-2 sentences) explanation of what this quote means in context. Don't be robotic, sound like a smart book club friend.`;
+      
+      const answer = await askGemini(prompt);
+      setHighlights((hs) => hs.map(h => h.id === hl.id ? { ...h, aiText: answer } : h));
+      setSheet({ open: true, kind: 'ai', state: 'loaded', hl: { ...hl, aiText: answer } });
+    } catch (e) {
+      setSheet({ open: true, kind: 'ai', state: 'loaded', hl: { ...hl, aiText: "Failed to generate an explanation. Check your network." } });
+    }
   };
 
   const note = () => {
@@ -85,10 +130,9 @@ export default function Reader() {
     setSel(null);
   };
 
-  const openBook = () => {
-    clearTimeout(timer.current);
+  const openBookDetails = () => {
     setSheet({ open: true, kind: 'book', state: 'loading' });
-    timer.current = setTimeout(() => setSheet((s) => ({ ...s, state: 'loaded' })), 1300);
+    setTimeout(() => setSheet((s) => ({ ...s, state: 'loaded' })), 600);
   };
 
   const saveSheet = (hl: HL, noteText: string) => {
@@ -104,13 +148,12 @@ export default function Reader() {
 
   return (
     <View style={[styles.screen, { backgroundColor: pal.bg }]}>
-      {/* page */}
       <Pressable style={{ flex: 1 }} onPress={() => { setChrome((c) => !c); setAaOpen(false); setSel(null); }}>
         <ScrollView contentContainerStyle={{ paddingTop: 104, paddingHorizontal: 32, paddingBottom: 140 }} showsVerticalScrollIndicator={false}>
-          {page === 0 && <Text style={[styles.meta, { color: pal.mut }]}>{R2BOOK.chapter} · p. {pageNo}</Text>}
+          {page === 0 && <Text style={[styles.meta, { color: pal.mut }]}>{book.title}</Text>}
           <Animated.View style={{ opacity: turn.interpolate({ inputRange: [-1, 0, 1], outputRange: [0, 1, 0] }), transform: [{ translateX: turn.interpolate({ inputRange: [-1, 0, 1], outputRange: [16, 0, -16] }) }] }}>
             <Text style={{ lineHeight: lh }}>
-              {R2BOOK.pages[page].map((sen, idx) => {
+              {pages[page].map((sen: any, idx: number) => {
                 const hl = hlFor(page, idx);
                 const inSel = !!sel && sel.page === page && idx >= sel.a && idx <= sel.b;
                 return (
@@ -146,19 +189,17 @@ export default function Reader() {
         </ScrollView>
       </Pressable>
 
-      {/* edge tap strips */}
       <Pressable style={[styles.edge, { left: 0 }]} onPress={() => goPage(-1)} />
       <Pressable style={[styles.edge, { right: 0 }]} onPress={() => goPage(1)} />
 
-      {/* top bar */}
       {chrome && (
         <View style={[styles.topbar, { paddingTop: insets.top + 8 }]}>
           <Pressable style={[styles.iconBtn, { borderColor: pal.mut + '40' }]} onPress={() => router.back()}>
             <Icons.back size={20} color={pal.fg} />
           </Pressable>
           <View style={styles.titleBlock}>
-            <Text numberOfLines={1} style={[styles.bTitle, { color: pal.fg }]}>{R2BOOK.title}</Text>
-            <Text numberOfLines={1} style={[styles.bChap, { color: pal.mut }]}>{R2BOOK.chapter}</Text>
+            <Text numberOfLines={1} style={[styles.bTitle, { color: pal.fg }]}>{book.title}</Text>
+            <Text numberOfLines={1} style={[styles.bChap, { color: pal.mut }]}>{book.author}</Text>
           </View>
           <View style={{ flexDirection: 'row', gap: 8 }}>
             <Pressable style={[styles.iconBtn, { borderColor: pal.mut + '40' }]} onPress={() => { setDrawer(true); setAaOpen(false); }}>
@@ -170,14 +211,13 @@ export default function Reader() {
             <Pressable style={[styles.iconBtn, { borderColor: pal.mut + '40' }]} onPress={() => setAaOpen((o) => !o)}>
               <Text style={[styles.aa, { color: pal.fg }]}>Aa</Text>
             </Pressable>
-            <Pressable style={[styles.iconBtn, { borderColor: pal.mut + '40' }]} onPress={openBook}>
+            <Pressable style={[styles.iconBtn, { borderColor: pal.mut + '40' }]} onPress={openBookDetails}>
               <Icons.sparkle size={17} color={pal.fg} />
             </Pressable>
           </View>
         </View>
       )}
 
-      {/* Aa popover */}
       {aaOpen && (
         <View style={[styles.aapop, { top: insets.top + 56 }]}>
           <AaRow label="Theme">
@@ -198,7 +238,6 @@ export default function Reader() {
         </View>
       )}
 
-      {/* footer */}
       {chrome && (
         <View style={[styles.foot, { paddingBottom: insets.bottom + 16 }]}>
           <View style={[styles.fProg, { backgroundColor: pal.fg + '1f' }]}>
@@ -208,15 +247,15 @@ export default function Reader() {
             <Pressable disabled={page === 0} onPress={() => goPage(-1)}>
               <Text style={[styles.fPg, { color: pal.fg, opacity: page === 0 ? 0.22 : 1 }]}>‹</Text>
             </Pressable>
-            <Text style={[styles.fMeta, { color: pal.mut }]}>p. {pageNo} of {R2BOOK.totalPages} · {R2BOOK.minutesLeft[page]}</Text>
-            <Pressable disabled={page === R2BOOK.pages.length - 1} onPress={() => goPage(1)}>
-              <Text style={[styles.fPg, { color: pal.fg, opacity: page === R2BOOK.pages.length - 1 ? 0.22 : 1 }]}>›</Text>
+            <Text style={[styles.fMeta, { color: pal.mut }]}>p. {pageNo} of {pages.length}</Text>
+            <Pressable disabled={page === pages.length - 1} onPress={() => goPage(1)}>
+              <Text style={[styles.fPg, { color: pal.fg, opacity: page === pages.length - 1 ? 0.22 : 1 }]}>›</Text>
             </Pressable>
           </View>
         </View>
       )}
 
-      <SummarySheet sheet={sheet} height={height} onClose={() => setSheet({ open: false })} onSave={saveSheet} onRemove={removeHl} />
+      <SummarySheet sheet={sheet} height={height} book={book} onClose={() => setSheet({ open: false })} onSave={saveSheet} onRemove={removeHl} />
       <Marginalia open={drawer} highlights={highlights} height={height} onClose={() => setDrawer(false)} onJump={jumpTo} />
     </View>
   );
@@ -238,16 +277,14 @@ function SegBtn({ on, onPress, label, fontSize = 12 }: { on: boolean; onPress: (
   );
 }
 
-function SummarySheet({ sheet, height, onClose, onSave, onRemove }: {
-  sheet: Sheet; height: number; onClose: () => void; onSave: (h: HL, n: string) => void; onRemove: (h: HL) => void;
+function SummarySheet({ sheet, height, book, onClose, onSave, onRemove }: {
+  sheet: Sheet; height: number; book: any; onClose: () => void; onSave: (h: HL, n: string) => void; onRemove: (h: HL) => void;
 }) {
   const y = useRef(new Animated.Value(height)).current;
   const dim = useRef(new Animated.Value(0)).current;
   const [draft, setDraft] = useState('');
   const [asks, setAsks] = useState<{ q: string; a: string | null }[]>([]);
   const [askDraft, setAskDraft] = useState('');
-  const askTimer = useRef<any>(null);
-  const insets = useSafeAreaInsets();
 
   useEffect(() => {
     if (sheet.open) { setDraft(sheet.hl?.note || ''); setAsks([]); setAskDraft(''); }
@@ -257,15 +294,19 @@ function SummarySheet({ sheet, height, onClose, onSave, onRemove }: {
     ]).start();
   }, [sheet.open, sheet.hl?.id]);
 
-  const send = () => {
+  const send = async () => {
     const q = askDraft.trim();
     if (!q) return;
     setAskDraft('');
     setAsks((a) => [...a, { q, a: null }]);
-    clearTimeout(askTimer.current);
-    askTimer.current = setTimeout(() => {
-      setAsks((a) => a.map((m, i) => (i === a.length - 1 ? { ...m, a: ASK_ANSWERS[(a.length - 1) % ASK_ANSWERS.length] } : m)));
-    }, 1400);
+    
+    try {
+      const prompt = `You are Reading Buddy, an AI assistant. The user is reading "${book.title}". They just asked: "${q}". Answer concisely and accurately based on general knowledge or the text context if applicable.`;
+      const answer = await askGemini(prompt);
+      setAsks((a) => a.map((m) => m.q === q ? { ...m, a: answer } : m));
+    } catch (e) {
+      setAsks((a) => a.map((m) => m.q === q ? { ...m, a: "Failed to answer." } : m));
+    }
   };
 
   const k = sheet.kind, hl = sheet.hl;
@@ -274,12 +315,12 @@ function SummarySheet({ sheet, height, onClose, onSave, onRemove }: {
       <Animated.View pointerEvents={sheet.open ? 'auto' : 'none'} style={[styles.dim, { opacity: dim }]}>
         <Pressable style={{ flex: 1 }} onPress={onClose} />
       </Animated.View>
-      <Animated.View style={[styles.sheet, { maxHeight: '80%', paddingBottom: insets.bottom + 30, transform: [{ translateY: y }] }]}>
+      <Animated.View style={[styles.sheet, { maxHeight: '80%', paddingBottom: 40, transform: [{ translateY: y }] }]}>
         <View style={styles.grab} />
         {k === 'book' && (
           <View style={[styles.attr, { marginBottom: 18 }]}>
             <Icons.book size={13} color={colors.amber} />
-            <Text style={styles.attrText}>WHOLE-BOOK SUMMARY</Text>
+            <Text style={styles.attrText}>BOOK DETAILS</Text>
           </View>
         )}
         {hl && k !== 'book' && <Text style={styles.snip}>"{hl.snippet}"</Text>}
@@ -298,7 +339,7 @@ function SummarySheet({ sheet, height, onClose, onSave, onRemove }: {
 
         {sheet.state === 'loaded' && (
           <ScrollView showsVerticalScrollIndicator={false}>
-            {k === 'book' && <Text style={styles.body}>{R2_BOOK_SUMMARY}</Text>}
+            {k === 'book' && <Text style={styles.body}>{book.title} by {book.author}</Text>}
             {(k === 'ai' || k === 'view') && hl?.aiText && <Text style={styles.body}>{hl.aiText}</Text>}
 
             {k !== 'book' && (
@@ -317,7 +358,7 @@ function SummarySheet({ sheet, height, onClose, onSave, onRemove }: {
 
             {k === 'book' && (
               <View style={{ marginBottom: 20 }}>
-                <Text style={[styles.noteLabel, { marginBottom: 10 }]}>✦ ASK THIS BOOK</Text>
+                <Text style={[styles.noteLabel, { marginBottom: 10 }]}>✦ ASK ABOUT THIS BOOK</Text>
                 {asks.map((m, i) => (
                   <View key={i} style={styles.askMsg}>
                     <Text style={styles.askQ}>{m.q}</Text>
@@ -327,7 +368,7 @@ function SummarySheet({ sheet, height, onClose, onSave, onRemove }: {
                 <View style={styles.askRow}>
                   <TextInput
                     style={styles.askInput}
-                    placeholder="Why does the house feel alive?"
+                    placeholder="Ask a question..."
                     placeholderTextColor="rgba(154,144,130,0.55)"
                     value={askDraft}
                     onChangeText={setAskDraft}
@@ -368,7 +409,6 @@ function Marginalia({ open, highlights, height, onClose, onJump }: {
 }) {
   const y = useRef(new Animated.Value(height)).current;
   const dim = useRef(new Animated.Value(0)).current;
-  const insets = useSafeAreaInsets();
   useEffect(() => {
     Animated.parallel([
       Animated.timing(y, { toValue: open ? 0 : height, duration: 420, easing: Easing.bezier(0.22, 1, 0.36, 1), useNativeDriver: true }),
@@ -381,7 +421,7 @@ function Marginalia({ open, highlights, height, onClose, onJump }: {
       <Animated.View pointerEvents={open ? 'auto' : 'none'} style={[styles.dim, { opacity: dim }]}>
         <Pressable style={{ flex: 1 }} onPress={onClose} />
       </Animated.View>
-      <Animated.View style={[styles.sheet, { height: '78%', paddingBottom: insets.bottom + 30, transform: [{ translateY: y }] }]}>
+      <Animated.View style={[styles.sheet, { height: '78%', paddingBottom: 40, transform: [{ translateY: y }] }]}>
         <View style={styles.grab} />
         <View style={styles.drawHead}>
           <Text style={styles.drawTitle}>Marginalia</Text>
@@ -393,7 +433,7 @@ function Marginalia({ open, highlights, height, onClose, onJump }: {
           )}
           {sorted.map((h) => (
             <Pressable key={h.id} style={styles.entry} onPress={() => onJump(h)}>
-              <Text style={styles.ePage}>P. {R2BOOK.startPage + h.page}</Text>
+              <Text style={styles.ePage}>P. {h.page + 1}</Text>
               <Text style={styles.eSnip}>"{h.snippet}"</Text>
               {h.aiText && <Text style={styles.eAi}>✦ {h.aiText}</Text>}
               {h.note && <Text style={styles.eNote}>✎ {h.note}</Text>}

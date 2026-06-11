@@ -1,0 +1,6 @@
+/* Fix react-native-web clipping to allow standard browser scrolling on web routes */
+html, body, #root {
+  height: auto !important;
+  min-height: 100vh;
+  overflow: auto !important;
+}

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { PaperScreen } from '../src/components/PaperScreen';
@@ -7,6 +7,7 @@ import { PrimaryButton } from '../src/components/PrimaryButton';
 import { Icons } from '../src/components/Icons';
 import { colors } from '../src/theme/colors';
 import { typography } from '../src/theme/typography';
+import { useRevenueCat } from '../src/providers/RevenueCatProvider';
 
 const BENEFITS = [
   'Unlimited summaries — highlight as much as you like',
@@ -18,8 +19,37 @@ const BENEFITS = [
 export default function Paywall() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const [plan, setPlan] = useState<'annual' | 'monthly'>('annual');
+  const { offerings, purchasePackage, restorePurchases, isPro, customerInfo } = useRevenueCat();
+  const [selectedPkg, setSelectedPkg] = useState<any | null>(null);
+  const [loading, setLoading] = useState(false);
   const close = () => router.back();
+
+  const handlePurchase = async () => {
+    if (!selectedPkg) return;
+    setLoading(true);
+    await purchasePackage(selectedPkg);
+    setLoading(false);
+    if (isPro) close();
+  };
+
+  const handleRestore = async () => {
+    setLoading(true);
+    await restorePurchases();
+    setLoading(false);
+    if (isPro) close();
+  };
+
+  if (isPro) {
+    return (
+      <PaperScreen>
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 30 }}>
+          <Text style={styles.h}>You are Pro!</Text>
+          <Text style={styles.sub}>Thank you for supporting Reading Buddy.</Text>
+          <PrimaryButton title="Back to reading" onPress={close} />
+        </View>
+      </PaperScreen>
+    );
+  }
 
   return (
     <PaperScreen>
@@ -41,16 +71,36 @@ export default function Paywall() {
           ))}
         </View>
 
-        <Plan name="Annual" price="$39.99 / year · 7-day free trial" tag="Save 33%" sel={plan === 'annual'} onPress={() => setPlan('annual')} />
-        <Plan name="Monthly" price="$4.99 / month" sel={plan === 'monthly'} onPress={() => setPlan('monthly')} />
+        {offerings.length === 0 ? (
+          <ActivityIndicator size="large" color={colors.amber} style={{ marginVertical: 20 }} />
+        ) : (
+          offerings.map((pkg: any) => {
+            const isSel = selectedPkg?.identifier === pkg.identifier;
+            return (
+              <Plan
+                key={pkg.identifier}
+                name={pkg.product?.title || pkg.rcBillingProduct?.title || pkg.webBillingProduct?.title || pkg.packageType}
+                price={pkg.product?.priceString || pkg.rcBillingProduct?.currentPrice?.formattedPrice || pkg.webBillingProduct?.currentPrice?.formattedPrice || ''}
+                tag={pkg.packageType === 'ANNUAL' || pkg.identifier === '$rc_annual' ? 'Save 33%' : undefined}
+                sel={isSel}
+                onPress={() => setSelectedPkg(pkg)}
+              />
+            );
+          })
+        )}
 
-        <PrimaryButton title={plan === 'annual' ? 'Start free trial' : 'Continue'} onPress={() => router.back()} style={{ marginTop: 8 }} />
+        <PrimaryButton 
+          title={loading ? "Processing..." : (selectedPkg?.packageType === 'ANNUAL' ? 'Start free trial' : 'Continue')} 
+          onPress={handlePurchase} 
+          style={{ marginTop: 8 }} 
+          disabled={!selectedPkg || loading}
+        />
         <Text style={styles.trial}>
-          {plan === 'annual' ? '7 days free, then $39.99/year. Cancel anytime.' : '$4.99 billed monthly. Cancel anytime.'}
+          {selectedPkg?.packageType === 'ANNUAL' ? '7 days free, then cancel anytime.' : 'Cancel anytime.'}
         </Text>
         <View style={styles.footLinks}>
           <Pressable onPress={close}><Text style={styles.link}>Maybe later</Text></Pressable>
-          <Pressable><Text style={styles.link}>Restore purchases</Text></Pressable>
+          <Pressable onPress={handleRestore}><Text style={styles.link}>Restore purchases</Text></Pressable>
         </View>
       </ScrollView>
     </PaperScreen>

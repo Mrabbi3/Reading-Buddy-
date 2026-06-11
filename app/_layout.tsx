@@ -18,6 +18,7 @@ import {
 import { colors } from '../src/theme/colors';
 import { AuthProvider, useAuth } from '../src/providers/AuthProvider';
 import { BookProvider } from '../src/providers/BookProvider';
+import { RevenueCatProvider } from '../src/providers/RevenueCatProvider';
 import { useEffect } from 'react';
 
 function InitialLayout() {
@@ -78,10 +79,12 @@ export default function RootLayout() {
 
   return (
     <AuthProvider>
-      <BookProvider>
-        <InitialLayout />
-        <StatusBar style="dark" />
-      </BookProvider>
+      <RevenueCatProvider>
+        <BookProvider>
+          <InitialLayout />
+          <StatusBar style="dark" />
+        </BookProvider>
+      </RevenueCatProvider>
     </AuthProvider>
   );
 }

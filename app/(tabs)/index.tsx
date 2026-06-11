@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Pressable } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -11,30 +11,27 @@ import { PrimaryButton } from '../../src/components/PrimaryButton';
 import { Icons } from '../../src/components/Icons';
 import { colors } from '../../src/theme/colors';
 import { typography } from '../../src/theme/typography';
-import { useBook } from '../../src/providers/BookProvider';
-import { BOOKS, Book } from '../../src/data/books';
+import { useAuth } from '../../src/providers/AuthProvider';
+import { supabase } from '../../src/lib/supabase';
 
-function BookRow({ book, onOpen }: { book: Book; onOpen: () => void }) {
+function BookRow({ book, onOpen }: { book: any; onOpen: (id: string) => void }) {
+  const cover = book.cover_colors || ['#F3E5AB', '#D2B48C'];
   return (
-    <Pressable style={styles.bookRow} onPress={onOpen}>
+    <Pressable style={styles.bookRow} onPress={() => onOpen(book.id)}>
       <LinearGradient
-        colors={book.cover}
+        colors={cover}
         start={{ x: 0.1, y: 0 }}
         end={{ x: 0.9, y: 1 }}
         style={styles.cover}>
         <View style={styles.coverSpine} />
-        <Text style={styles.coverText}>{book.coverText}</Text>
+        <Text style={styles.coverText}>{book.title.substring(0, 30)}</Text>
       </LinearGradient>
       <View style={styles.bookMain}>
         <Text style={styles.bookTitle}>{book.title}</Text>
-        <Text style={styles.bookAuthor}>{book.author}</Text>
+        <Text style={styles.bookAuthor}>{book.author || 'Unknown Author'}</Text>
         <View style={styles.prog}>
           <View style={[styles.progFill, { width: `${Math.max(book.progress * 100, 0)}%` as any }]} />
         </View>
-        <Text style={styles.progMeta}>
-          {book.progress > 0 ? `${Math.round(book.progress * 100)}% · ` : ''}
-          {book.last}
-        </Text>
       </View>
     </Pressable>
   );
@@ -43,8 +40,26 @@ function BookRow({ book, onOpen }: { book: Book; onOpen: () => void }) {
 export default function LibraryScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const { setCurrentPdfUri, setPdfBase64 } = useBook();
-  const [empty, setEmpty] = useState(false);
+  const { session } = useAuth();
+  const [books, setBooks] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [importing, setImporting] = useState(false);
+
+  useEffect(() => {
+    fetchBooks();
+  }, []);
+
+  const fetchBooks = async () => {
+    setLoading(true);
+    const { data, error } = await supabase
+      .from('books')
+      .select('id, title, author, cover_colors, progress')
+      .order('created_at', { ascending: false });
+    if (!error && data) {
+      setBooks(data);
+    }
+    setLoading(false);
+  };
 
   const handleImport = async () => {
     try {
@@ -53,20 +68,78 @@ export default function LibraryScreen() {
         copyToCacheDirectory: true,
       });
       if (!result.canceled && result.assets?.length) {
+        setImporting(true);
         const uri = result.assets[0].uri;
-        const base64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' });
-        setCurrentPdfUri(uri);
-        setPdfBase64(base64);
-        router.push('/pdf-reader/current');
+        let base64;
+        try {
+          base64 = await FileSystem.readAsStringAsync(uri, { encoding: 'base64' });
+        } catch (e) {
+          // If native file system read fails (e.g. on web), we might need to fetch the blob.
+          // For now, assume it's natively working or use fetch on web
+          const res = await fetch(uri);
+          const blob = await res.blob();
+          base64 = await new Promise<string>((resolve) => {
+            const reader = new FileReader();
+            reader.onloadend = () => resolve((reader.result as string).split(',')[1]);
+            reader.readAsDataURL(blob);
+          });
+        }
+        
+        // Call Edge Function
+        const { data: parsedData, error: parseError } = await supabase.functions.invoke('parse-pdf', {
+          body: { base64Pdf: base64 }
+        });
+
+        if (parseError || !parsedData?.pages) {
+          throw new Error('Failed to parse PDF.');
+        }
+
+        // Insert into database
+        const fileName = result.assets[0].name.replace('.pdf', '');
+        const randomColors = [
+          ['#2E4A62', '#1B2A38'], ['#5B3A44', '#38232A'], ['#3A5B44', '#23382A'], ['#5A4E3A', '#383024']
+        ][Math.floor(Math.random() * 4)];
+
+        const { data: newBook, error: insertError } = await supabase
+          .from('books')
+          .insert({
+            user_id: session?.user?.id,
+            title: fileName,
+            author: 'Imported PDF',
+            cover_colors: randomColors,
+            content: parsedData,
+            progress: 0
+          })
+          .select()
+          .single();
+
+        setImporting(false);
+        if (insertError) throw insertError;
+        
+        // Refresh library and open book
+        fetchBooks();
+        router.push(`/pdf-reader/${newBook.id}`);
       }
-    } catch (e) {
+    } catch (e: any) {
+      setImporting(false);
+      Alert.alert('Import Failed', e.message);
       console.error('Error picking document:', e);
     }
   };
 
-  const openBook = () => router.push('/pdf-reader/quiet-rooms');
+  const openBook = (id: string) => router.push(`/pdf-reader/${id}`);
 
-  if (empty) {
+  if (loading && books.length === 0) {
+    return (
+      <PaperScreen>
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+          <ActivityIndicator size="large" color={colors.amber} />
+        </View>
+      </PaperScreen>
+    );
+  }
+
+  if (books.length === 0) {
     return (
       <PaperScreen>
         <View style={[styles.emptyWrap, { paddingTop: insets.top }]}>
@@ -80,9 +153,9 @@ export default function LibraryScreen() {
             Your books, articles and papers live here. Highlight anything — I'll explain it.
           </Text>
           <PrimaryButton
-            title="Import a PDF"
-            onPress={handleImport}
-            left={<Icons.plus size={18} color="#2b1d05" />}
+            title={importing ? "Importing..." : "Import a PDF"}
+            onPress={importing ? undefined : handleImport}
+            left={!importing && <Icons.plus size={18} color="#2b1d05" />}
             style={{ paddingHorizontal: 30 }}
           />
         </View>
@@ -98,7 +171,7 @@ export default function LibraryScreen() {
         <View style={styles.libHead}>
           <View style={styles.libTop}>
             <Pressable style={styles.avatar} onPress={() => router.push('/(tabs)/settings')}>
-              <Text style={styles.avatarText}>E</Text>
+              <Text style={styles.avatarText}>{session?.user?.email?.charAt(0).toUpperCase() || 'U'}</Text>
             </Pressable>
             <Pressable style={styles.quota} onPress={() => router.push('/subscription')}>
               <Text style={styles.quotaText}>3 summaries left today</Text>
@@ -108,7 +181,7 @@ export default function LibraryScreen() {
         </View>
 
         <View style={styles.libList}>
-          {BOOKS.map((b) => (
+          {books.map((b) => (
             <BookRow key={b.id} book={b} onOpen={openBook} />
           ))}
         </View>
@@ -116,9 +189,9 @@ export default function LibraryScreen() {
 
       <View style={[styles.importBar, { paddingBottom: insets.bottom + 20 }]}>
         <PrimaryButton
-          title="Import a PDF"
-          onPress={handleImport}
-          left={<Icons.plus size={18} color="#2b1d05" />}
+          title={importing ? "Importing..." : "Import a PDF"}
+          onPress={importing ? undefined : handleImport}
+          left={!importing && <Icons.plus size={18} color="#2b1d05" />}
         />
       </View>
     </PaperScreen>

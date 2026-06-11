@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, Image, Pressable } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
 import { PrimaryButton } from '../src/components/PrimaryButton';
@@ -11,12 +11,15 @@ export default function Landing() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.content}>
-        <View style={styles.lamp} />
+        <Image source={require('../assets/icon.png')} style={styles.logo} />
         <Text style={styles.title}>Reading Buddy</Text>
         <Text style={styles.subtitle}>never read alone</Text>
       </View>
       <View style={styles.footer}>
         <PrimaryButton title="Start Reading" onPress={() => router.replace('/onboarding')} />
+        <Pressable onPress={() => router.push('/auth/login')} style={styles.loginBtn}>
+          <Text style={styles.loginText}>Already have an account? Log in</Text>
+        </Pressable>
         <Text style={styles.disclaimer}>A reading companion for everything you read.</Text>
       </View>
     </SafeAreaView>
@@ -26,10 +29,11 @@ export default function Landing() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.paper, justifyContent: 'space-between' },
   content: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-  lamp: { width: 64, height: 64, borderRadius: 999, backgroundColor: colors.amber, marginBottom: 26,
-    shadowColor: '#E0A23B', shadowOpacity: 0.55, shadowRadius: 34, shadowOffset: { width: 0, height: 0 }, elevation: 10 },
+  logo: { width: 84, height: 84, borderRadius: 18, marginBottom: 26 },
   title: { fontFamily: typography.serifLight, fontSize: 46, color: colors.ink, letterSpacing: -1 },
   subtitle: { fontFamily: typography.serifItalic, fontSize: 20, color: colors.muted, marginTop: 14 },
   footer: { paddingHorizontal: 32, paddingBottom: 40 },
-  disclaimer: { textAlign: 'center', fontFamily: typography.sans, fontSize: 13, color: colors.muted, marginTop: 16 },
+  loginBtn: { paddingVertical: 14, alignItems: 'center' },
+  loginText: { fontFamily: typography.sansSemibold, fontSize: 15, color: colors.amberInk },
+  disclaimer: { textAlign: 'center', fontFamily: typography.sans, fontSize: 13, color: colors.muted, marginTop: 4 },
 });

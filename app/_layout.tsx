@@ -27,10 +27,17 @@ function InitialLayout() {
 
   useEffect(() => {
     if (loading) return;
+
     const inAuthGroup = segments[0] === 'auth';
-    if (!session && !inAuthGroup) {
+    const inTabs = segments[0] === '(tabs)';
+    const inPdfReader = segments[0] === 'pdf-reader';
+
+    // Only redirect if user is trying to access protected routes without auth
+    if (!session && (inTabs || inPdfReader)) {
       router.replace('/auth/login');
-    } else if (session && inAuthGroup) {
+    }
+    // If user just logged in and is still on auth screens, send to tabs
+    else if (session && inAuthGroup) {
       router.replace('/(tabs)');
     }
   }, [session, loading, segments]);
@@ -40,6 +47,7 @@ function InitialLayout() {
       screenOptions={{
         headerShown: false,
         contentStyle: { backgroundColor: colors.paper },
+        animation: 'fade',
       }}>
       <Stack.Screen name="index" />
       <Stack.Screen name="onboarding" />
@@ -69,11 +77,11 @@ export default function RootLayout() {
   if (!fontsLoaded) return null;
 
   return (
-<AuthProvider>
-        <BookProvider>
-          <InitialLayout />
-          <StatusBar style="dark" />
-        </BookProvider>
-      </AuthProvider>
+    <AuthProvider>
+      <BookProvider>
+        <InitialLayout />
+        <StatusBar style="dark" />
+      </BookProvider>
+    </AuthProvider>
   );
 }

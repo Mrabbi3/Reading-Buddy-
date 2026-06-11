@@ -41,3 +41,7 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+# FUSE temp artifacts
+.fuse_hidden*
+**/.fuse_hidden*

@@ -1,0 +1,37 @@
+{
+  "expo": {
+    "name": "Reading Buddy",
+    "slug": "reading-buddy",
+    "scheme": "readingbuddy",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.readingbuddy.app"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "713c040a-0ee8-4cdb-88c5-529b9bbe70f6"
+      }
+    },
+    "owner": "reading-buddy",
+    "plugins": [
+      "expo-router",
+      "expo-font"
+    ]
+  }
+}
